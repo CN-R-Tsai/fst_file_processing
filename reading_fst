@@ -1,0 +1,117 @@
+library(fst)
+library(ggplot2)
+library(dplyr)
+library(shiny)
+library(randomForest)
+library(DT)
+
+dcp_9 <- read.fst("/data/3.Temp/fst_files/9/202307.fst")
+dcp_14 <- read.fst("/data/3.Temp/fst_files/14/202307.fst")
+dcp_15 <- read.fst("/data/3.Temp/fst_files/15/202307.fst")
+
+the_data <-bind_rows(dcp_9, dcp_14, dcp_15)
+
+# remove columns contain NA values
+the_data_noNA <- the_data %>% select_if(~ !any(is.na(.)))
+
+
+# exclude cols with zero variance
+the_data_noVar <- the_data_noNA[, !apply(the_data_noNA, MARGIN = 2, function(x) max(x, na.rm = TRUE) == min(x, na.rm = TRUE))]
+
+# subset dataset, only statistics data needed for PCA calculate
+the_data_subset  <- the_data_noVar[, -c(1:8)]
+
+
+## --- Pr <- prcomp(x, scale. = TRUE)
+pca_output <- prcomp(na.omit(the_data_subset), center = FALSE, scale. = TRUE)
+Means   <- colMeans(the_data_subset)
+Sigma <- cov(the_data_subset)
+
+#md <- mahalanobis(the_data_subset, Means, Sigma)
+
+
+pcdata <- cbind(the_data$wid, pca_output$x)
+colnames(pcdata)[1] <- "wid"
+
+
+pc_plot_no_groups <- ggplot(data = pcdata, aes_string(x = "PC1", y = "PC2", color = "recipe")) +
+  geom_point(size = 2) +
+  theme_bw(base_size = 14) +
+  theme(legend.position="bottom") +
+  theme(legend.text=element_text(size=8))
+pc_plot_no_groups
+
+df_ABTest <- cbind(the_data$wid, the_data_subset)
+colnames(df_ABTest)[1] <- "wid"
+
+
+## ` ` ` ClassA
+classA <- df_ABTest %>% 
+  filter(
+    wid %in% 
+      c(1072,1075,1084)
+)
+
+# add column called 'y'
+y <- "class A"
+classA$y <- y
+
+  
+## ` ` ` ClassB  
+classB <- df_ABTest %>% 
+  filter(
+    wid %in% 
+      c(1053,1086,1085)
+  ) 
+# add column called 'y'
+y <- "class B"
+classB$y <- y
+
+  
+#
+All_data <- rbind(classA, classB)
+data <- rbind(classA, classB) %>%
+  dplyr::select(-c(wid))
+data <- data[data$y != "None", ]
+
+data$y <- factor(as.character(data$y))
+
+mo <- randomForest(y ~ ., data = data, ntree = 1000, mtry = 2)
+
+impo <- mo$importance
+
+idx <- sort.int(mo$importance, decreasing = T, index.return = T)$ix
+
+fimp0 <- mo$importance[idx]
+
+names(fimp0) <- rownames(mo$importance)[idx]
+fimp0 <- data.table(name = names(fimp0), value = fimp0)
+print(fimp0[c(1:10)])
+
+
+p <- ggplot(fimp0[c(1:10)], aes(x = reorder(name, value), y = value)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  xlab("") +
+  ylab("") +
+  coord_flip() +
+  ggtitle("Feature importance") +
+  theme(legend.position = "bottom", legend.box = "horizontal")
+p
+  
+ui <- fluidPage(
+  plotOutput("plot",
+             click =  clickOpts(id = "plot_click_mainPlot"), 
+             dblclick = "plot_dblclick", 
+             brush = brushOpts(id = "Plot_brush_mainPlot", resetOnNew = TRUE, fill = "#ccc",)
+             width = "600px")
+)
+
+
+server <- function(input, output, session) {
+  output$plot <- renderPlot(pc_plot_no_groups)
+}
+
+
+shinyApp(ui, server)
+
+
